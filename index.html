@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>점프 피하기 게임 (버그 수정)</title>
+<style>
+    body {
+        background-color: #f0f0f0;
+        background-image: url('background.png'); /* 배경 이미지 파일 경로 */
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        overflow: hidden; /* 전체 페이지 스크롤 및 줌 방지 */
+        font-family: Arial, sans-serif;
+    }
+
+    #game-container {
+        width: 1000px;
+        height: 500px;
+        border: 2px solid #333;
+        background-color: rgba(255, 255, 255, 0.8);
+        position: relative;
+        overflow: hidden;
+        cursor: pointer;
+    }
+
+    #player {
+        width: 50px;
+        height: 50px;
+        background-image: url('player.png');
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+        position: absolute;
+        bottom: 0;
+        left: 100px;
+        transition: filter 0.1s ease-out; /* 무적 상태 전환 시 부드러운 효과 */
+    }
+
+    /* 무적 상태일 때 플레이어 스타일 */
+    #player.invincible {
+        filter: brightness(2) saturate(1.5); /* 밝기와 채도 증가 효과 */
+        animation: blink 0.3s infinite alternate; /* 깜빡임 효과 */
+    }
+
+    @keyframes blink {
+        from { opacity: 1; }
+        to { opacity: 0.5; }
+    }
+
+    .obstacle {
+        background-image: url('obstacle.png');
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+        width: 30px;
+        position: absolute;
+        bottom: 0;
+        right: -30px;
+    }
+
+    .flying-obstacle {
+        background-image: url('flying_obstacle.png');
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+        border-radius: 0;
+        position: absolute;
+        right: -40px;
+    }
+
+    .bonus-item {
+        background-image: url('invincibility_item.png'); /* 무적 아이템 이미지 파일 경로 */
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+        position: absolute;
+        right: -50px;
+    }
+
+    #game-over {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 4em;
+        color: #333;
+        display: none;
+        text-align: center;
+        z-index: 10;
+        pointer-events: auto;
+    }
+
+    #restart-button {
+        padding: 15px 30px;
+        font-size: 1.5em;
+        cursor: pointer;
+        background-color: #28a716;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        margin-top: 30px;
+        display: none;
+        pointer-events: auto;
+    }
+
+    #score {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        font-size: 2em;
+        color: #333;
+        z-index: 5;
+    }
+</style>
+</head>
+<body>
+
+<audio id="bgMusic" src="background_music.mp3" loop preload="auto"></audio>
+<audio id="jumpSound" src="jump_sound.mp3" preload="auto"></audio>
+<audio id="gameOverSound" src="game_over_sound.mp3" preload="auto"></audio>
+
+
+<div id="game-container">
+    <div id="player"></div>
+    <div id="game-over">
+        게임 오버!
+        <button id="restart-button">다시 시작</button>
+    </div>
+    <div id="score">점수: 0</div>
+</div>
+
+<script>
+    const player = document.getElementById('player');
+    const gameContainer = document.getElementById('game-container');
+    const gameOverDisplay = document.getElementById('game-over');
+    const restartButton = document.getElementById('restart-button');
+    const scoreDisplay = document.getElementById('score');
+
+    const bgMusic = document.getElementById('bgMusic');
+    const jumpSound = document.getElementById('jumpSound');
+    const gameOverSound = document.getElementById('gameOverSound');
+
+    let currentJumpCount = 0;
+    const maxJumpLevel = 5;
+    let playerBottom = 0;
+    let playerVelocityY = 0;
+
+    // 중력 가속도를 높여 착지 시간을 빠르게 합니다.
+    const gravity = 1500; // pixels/second^2 (이전: 980)
+    const jumpStrengths = [0, 550, 450, 350, 250, 150]; // pixels/second
+
+    let gameOver = false;
+    let score = 0;
+    let obstacleSpeed = 200; // pixels/second (initial speed)
+
+    const initialObstacleSpeed = 200; // pixels per second
+    const maxObstacleSpeed = 500;   // pixels per second
+    const speedIncreasePerScore = 10; // pixels per second per score
+
+    const initialObstacleInterval = 1800; // milliseconds (초기 간격 증가)
+    const minObstacleInterval = 700;    // milliseconds (최소 간격 증가)
+    const intervalDecreasePerScore = 15; // milliseconds per score
+
+    const initialMinGroundObstacleHeight = 50;
+    const initialMaxGroundObstacleHeight = 150;
+    const groundHeightIncreasePerScore = 5;
+    let currentMaxGroundObstacleHeight = initialMaxGroundObstacleHeight;
+
+    // 공중 장애물 관련 설정
+    const flyingObstacleChance = 0.08;
+    const minFlyingObstacleBottom = 80;
+    const maxFlyingObstacleBottom = 300;
+    const minFlyingObstacleSize = 30;
+    const maxFlyingObstacleSize = 60;
+
+    // 보너스 아이템 관련 설정
+    const bonusItemChance = 0.03;
+    const minBonusItemSize = 40;
+    const maxBonusItemSize = 50;
+    const minBonusItemBottom = 100;
+    const maxBonusItemBottom = 250;
+    const invincibilityDuration = 5000;
+
+    let isInvincible = false;
+    let invincibilityTimeoutId;
+
+    let animationFrameId;
+    let maxPlayerHeight;
+    let maxJumpHeight = 0; // 플레이어의 최대 점프 높이를 저장할 변수
+
+    // 음악 재생 상태 플래그
+    let bgMusicPlayedFirstTime = false;
+
+    // Time tracking variables for delta time
+    let lastFrameTime = 0;
+    let lastObstacleSpawnTime = 0;
+    let currentObstacleInterval = initialObstacleInterval; // Added to store dynamic interval
+
+    // 모바일 기기 감지 함수
+    function isMobile() {
+        return /Mobi|Android/i.test(navigator.userAgent);
+    }
+
+    // 플레이어의 최대 점프 높이를 계산하는 함수
+    function calculateMaxJumpHeight() {
+        let testPlayerVelocityY = 0;
+        let testPlayerBottom = 0;
+        let highestPoint = 0;
+        const simulationTimeStep = 1/60; // 60fps 기준으로 시뮬레이션
+
+        // 각 점프 단계의 힘을 사용하여 최대 점프 높이 계산
+        for (let i = 1; i <= maxJumpLevel; i++) {
+            testPlayerVelocityY = jumpStrengths[i];
+            // 상승 구간 시뮬레이션
+            while (testPlayerVelocityY > 0) {
+                testPlayerBottom += testPlayerVelocityY * simulationTimeStep;
+                testPlayerVelocityY -= gravity * simulationTimeStep;
+                if (testPlayerBottom > highestPoint) {
+                    highestPoint = testPlayerBottom;
+                }
+            }
+        }
+        return highestPoint;
+    }
+
+
+    document.addEventListener('DOMContentLoaded', () => {
+        maxPlayerHeight = gameContainer.offsetHeight - player.offsetHeight;
+        // 최대 점프 높이 계산 및 저장
+        maxJumpHeight = calculateMaxJumpHeight();
+        // 콘솔에 최대 점프 높이 출력 (디버깅용)
+        console.log("플레이어의 최대 점프 높이:", maxJumpHeight, "px");
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.code === 'Space' && !gameOver) {
+            if (!bgMusicPlayedFirstTime) {
+                tryPlayBgMusic();
+            }
+            if (currentJumpCount < maxJumpLevel) {
+                startJump();
+            }
+        }
+    });
+
+    gameContainer.addEventListener('touchstart', (event) => {
+        if (!bgMusicPlayedFirstTime) {
+            tryPlayBgMusic();
+        }
+        if (!gameOver) {
+            event.preventDefault();
+            if (currentJumpCount < maxJumpLevel) {
+                startJump();
+                if (jumpSound) {
+                    jumpSound.currentTime = 0;
+                    jumpSound.play().catch(e => console.log("점프 사운드 재생 실패:", e));
+                }
+            }
+        }
+    }, { passive: false });
+
+    restartButton.addEventListener('touchend', (event) => {
+        event.preventDefault();
+        if (gameOver) {
+            startGame();
+        }
+    });
+
+    restartButton.addEventListener('click', () => {
+        if (gameOver) {
+            startGame();
+        }
+    });
+
+    function tryPlayBgMusic() {
+        if (bgMusic && !bgMusicPlayedFirstTime) {
+            bgMusic.volume = 0.5;
+            bgMusic.play()
+                .then(() => {
+                    console.log("배경 음악 재생 성공!");
+                    bgMusicPlayedFirstTime = true;
+                })
+                .catch(e => {
+                    console.log("배경 음악 재생 실패 (사용자 상호작용 필요):", e);
+                });
+        }
+    }
+
+    function startJump() {
+        currentJumpCount++;
+        if (jumpStrengths.length > currentJumpCount) {
+            playerVelocityY = jumpStrengths[currentJumpCount];
+            if (jumpSound) {
+                jumpSound.currentTime = 0;
+                jumpSound.play().catch(e => console.log("점프 사운드 재생 실패:", e));
+            }
+        }
+    }
+
+    // --- Main Game Loop with Delta Time ---
+    function gameLoop(currentTime) {
+        if (!lastFrameTime) lastFrameTime = currentTime;
+        const deltaTime = (currentTime - lastFrameTime) / 1000; // Convert to seconds
+        lastFrameTime = currentTime;
+
+        if (gameOver) {
+            cancelAnimationFrame(animationFrameId);
+            return;
+        }
+
+        // 1. Update Player Position
+        playerBottom += playerVelocityY * deltaTime;
+        playerVelocityY -= gravity * deltaTime;
+
+        if (playerBottom < 0) {
+            playerBottom = 0;
+            playerVelocityY = 0;
+            currentJumpCount = 0;
+        }
+
+        if (playerBottom > maxPlayerHeight) {
+            playerBottom = maxPlayerHeight;
+            if (playerVelocityY > 0) {
+                playerVelocityY = 0;
+            }
+        }
+        player.style.bottom = `${playerBottom}px`;
+
+        // 2. Obstacle Spawning (Time-based)
+        if (currentTime - lastObstacleSpawnTime > currentObstacleInterval) {
+            createObstacle();
+            lastObstacleSpawnTime = currentTime;
+        }
+
+        // 3. Update Obstacle Positions and Handle Collisions
+        document.querySelectorAll('.obstacle, .flying-obstacle, .bonus-item').forEach(element => {
+            let elementRight = parseFloat(element.style.right);
+            elementRight += obstacleSpeed * deltaTime; // Use obstacleSpeed which is px/s
+            element.style.right = `${elementRight}px`;
+
+            const playerRect = player.getBoundingClientRect();
+            const elementRect = element.getBoundingClientRect();
+
+            // 충돌 감지
+            if (
+                playerRect.right > elementRect.left &&
+                playerRect.left < elementRect.right &&
+                playerRect.bottom > elementRect.top &&
+                playerRect.top < elementRect.bottom
+            ) {
+                if (element.classList.contains('obstacle') || element.classList.contains('flying-obstacle')) {
+                    if (!isInvincible) {
+                        endGame();
+                        return; // Stop processing this frame if game over
+                    } else {
+                        element.remove();
+                        return; // Remove obstacle but continue game
+                    }
+                } else if (element.classList.contains('bonus-item')) {
+                    activateInvincibility();
+                    element.remove();
+                    return; // Remove item
+                }
+            }
+
+            // 화면 밖으로 나가면 제거
+            const elementWidth = parseFloat(element.style.width || (element.classList.contains('obstacle') ? 30 : 40)); // Default for flying obstacles
+            if (elementRight > gameContainer.offsetWidth + elementWidth) {
+                if (element.classList.contains('obstacle') || element.classList.contains('flying-obstacle')) {
+                    score++;
+                    scoreDisplay.textContent = `점수: ${score}`;
+                    adjustDifficulty();
+                }
+                element.remove();
+            }
+        });
+
+        animationFrameId = requestAnimationFrame(gameLoop);
+    }
+    // --- End Main Game Loop with Delta Time ---
+
+    function createObstacle() {
+        if (gameOver) return;
+
+        const element = document.createElement('div');
+        gameContainer.appendChild(element);
+
+        let currentElementWidth;
+        let elementType;
+
+        if (Math.random() < bonusItemChance) {
+            elementType = 'item';
+            element.classList.add('bonus-item');
+            const randomItemSize = Math.random() * (maxBonusItemSize - minBonusItemSize) + minBonusItemSize;
+            element.style.width = `${randomItemSize}px`;
+            element.style.height = `${randomItemSize}px`;
+            currentElementWidth = randomItemSize;
+
+            const randomBottom = Math.random() * (maxBonusItemBottom - minBonusItemBottom) + minBonusItemBottom;
+            element.style.bottom = `${randomBottom}px`;
+        } else if (Math.random() < flyingObstacleChance) {
+            elementType = 'obstacle';
+            element.classList.add('flying-obstacle');
+
+            const randomSize = Math.random() * (maxFlyingObstacleSize - minFlyingObstacleSize) + minFlyingObstacleSize;
+            element.style.width = `${randomSize}px`;
+            element.style.height = `${randomSize}px`;
+            currentElementWidth = randomSize;
+
+            const randomBottom = Math.random() * (maxFlyingObstacleBottom - minFlyingObstacleBottom) + minFlyingObstacleBottom;
+            element.style.bottom = `${randomBottom}px`;
+        } else {
+            elementType = 'obstacle';
+            element.classList.add('obstacle');
+            const minHeight = initialMinGroundObstacleHeight;
+            // 지상 장애물의 높이를 플레이어의 최대 점프 높이로 제한
+            // 플레이어 높이(50px)를 제외하고, 장애물 상단에 최소 10px의 여유 공간을 둡니다.
+            const adjustedMaxGroundObstacleHeight = Math.max(minHeight, Math.min(currentMaxGroundObstacleHeight, maxJumpHeight - player.offsetHeight - 10)); // 10px는 여유 공간
+            const randomHeight = Math.random() * (adjustedMaxGroundObstacleHeight - minHeight) + minHeight;
+            element.style.height = `${randomHeight}px`;
+            element.style.bottom = '0px';
+            currentElementWidth = 30; // Assuming obstacle.png is 30px wide
+        }
+        element.style.right = `${-currentElementWidth}px`; // Initialize off-screen
+    }
+
+    function activateInvincibility() {
+        isInvincible = true;
+        player.classList.add('invincible');
+
+        if (invincibilityTimeoutId) {
+            clearTimeout(invincibilityTimeoutId);
+        }
+
+        invincibilityTimeoutId = setTimeout(() => {
+            isInvincible = false;
+            player.classList.remove('invincible');
+        }, invincibilityDuration);
+    }
+
+    function adjustDifficulty() {
+        obstacleSpeed = Math.min(initialObstacleSpeed + (score * speedIncreasePerScore), maxObstacleSpeed);
+        currentObstacleInterval = Math.max(initialObstacleInterval - (score * intervalDecreasePerScore), minObstacleInterval);
+        
+        // 지상 장애물의 최대 높이를 플레이어의 최대 점프 높이에 맞춰 제한
+        // 10px는 장애물 상단과 플레이어 하단 사이의 최소 여유 공간
+        const playerJumpTolerance = 10;
+        currentMaxGroundObstacleHeight = Math.min(
+            initialMaxGroundObstacleHeight + (score * groundHeightIncreasePerScore),
+            gameContainer.offsetHeight - player.offsetHeight - 20, // 화면 상단 여유 공간
+            maxJumpHeight - playerJumpTolerance // 플레이어 점프 최대 높이에서 여유 공간 제외
+        );
+        // 최소 높이보다 낮아지지 않도록 보장
+        currentMaxGroundObstacleHeight = Math.max(currentMaxGroundObstacleHeight, initialMinGroundObstacleHeight);
+
+        console.log(`조정된 장애물 속도: ${obstacleSpeed.toFixed(2)}, 간격: ${currentObstacleInterval}ms, 최대 지상 장애물 높이: ${currentMaxGroundObstacleHeight.toFixed(2)}`);
+    }
+
+    function startGame() {
+        bgMusicPlayedFirstTime = false;
+        gameOver = false;
+        score = 0;
+        scoreDisplay.textContent = `점수: 0`;
+        gameOverDisplay.style.display = 'none';
+        restartButton.style.display = 'none';
+
+        isInvincible = false;
+        player.classList.remove('invincible');
+        if (invincibilityTimeoutId) {
+            clearTimeout(invincibilityTimeoutId);
+        }
+
+        obstacleSpeed = initialObstacleSpeed;
+        currentObstacleInterval = initialObstacleInterval; // Reset interval
+        currentMaxGroundObstacleHeight = initialMaxGroundObstacleHeight; // 시작 시 초기값으로 재설정
+
+        playerBottom = 0;
+        playerVelocityY = 0;
+        currentJumpCount = 0;
+        player.style.bottom = '0px';
+
+        document.querySelectorAll('.obstacle, .flying-obstacle, .bonus-item').forEach(el => el.remove());
+
+        // Reset time tracking for game loop
+        lastFrameTime = 0;
+        lastObstacleSpawnTime = 0;
+
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = requestAnimationFrame(gameLoop); // Start the main game loop
+    }
+
+    function endGame() {
+        gameOver = true;
+        gameOverDisplay.style.display = 'block';
+
+        cancelAnimationFrame(animationFrameId);
+        if (invincibilityTimeoutId) {
+            clearTimeout(invincibilityTimeoutId);
+        }
+
+        if (bgMusic) {
+            bgMusic.pause();
+        }
+        if (gameOverSound) {
+            gameOverSound.currentTime = 0;
+            gameOverSound.play().catch(e => console.log("게임 오버 사운드 재생 실패:", e));
+        }
+
+        if (isMobile()) {
+            setTimeout(() => {
+                startGame();
+            }, 1500);
+        } else {
+            restartButton.style.display = 'inline-block';
+        }
+    }
+
+    startGame();
+</script>
+</body>
+</html>
